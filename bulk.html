@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owau — Bulk Import Cutout Scenes</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background: #0d0d17; color: #eee; }
+  h1 { font-size: 20px; }
+  .warning { background: #3a2a1a; color: #fc8; padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 12px; }
+  label { display: block; margin-top: 16px; font-size: 13px; color: #aaa; }
+  textarea, select { width: 100%; padding: 10px; margin-top: 4px; border-radius: 8px; border: 1px solid #444; background: #1a1a2a; color: #eee; box-sizing: border-box; font-size: 14px; font-family: monospace; }
+  textarea { height: 200px; resize: vertical; }
+  button { margin-top: 20px; padding: 12px 20px; border-radius: 8px; border: none; background: #d4af6a; color: #1a1a2a; font-weight: 600; font-size: 15px; width: 100%; cursor: pointer; }
+  button:disabled { opacity: 0.5; }
+  #log { margin-top: 16px; padding: 10px; border-radius: 8px; font-size: 13px; background: #1a1a2a; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; }
+  .log-success { color: #8f8; }
+  .log-error { color: #f88; }
+  .log-info { color: #8cf; }
+</style>
+</head>
+<body>
+  <h1>Bulk Import Cutout Scenes</h1>
+
+  <div class="warning">⚠️ Only paste URLs to images with <strong>no people in them</strong> — verify each one visually before pasting. This tool doesn't check for you.</div>
+
+  <label>Category for this batch</label>
+  <select id="category">
+    <option value="Wealth & Success">Wealth & Success</option>
+    <option value="Career & Purpose">Career & Purpose</option>
+    <option value="Love & Relationships">Love & Relationships</option>
+    <option value="Health & Body">Health & Body</option>
+    <option value="Mindset & Growth">Mindset & Growth</option>
+  </select>
+
+  <label>Direct image URLs (one per line — right-click an image on Pixabay → Copy Image Address)</label>
+  <textarea id="urls" placeholder="https://cdn.pixabay.com/photo/.../image1.jpg
+https://cdn.pixabay.com/photo/.../image2.jpg
+..."></textarea>
+
+  <button id="importBtn" onclick="bulkImport()">Import All</button>
+
+  <div id="log"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = "https://efidvkbdbdddfldkjois.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmaWR2a2JkYmRkZGZsZGtqb2lzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2NzU3OTYsImV4cCI6MjEwMDI1MTc5Nn0.q8x2-rN8Cl31dFIwOhs4P0kX1GTvj_Zen7t8w5x8sTs";
+  const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const BUCKET = "cutout-scenes";
+
+  function log(msg, cls) {
+    const el = document.getElementById('log');
+    const line = document.createElement('div');
+    line.className = cls || '';
+    line.textContent = msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function guessTitleFromUrl(url) {
+    const filename = url.split('/').pop().split('?')[0];
+    const nameOnly = filename.replace(/\.[^.]+$/, '').replace(/_\d+$/, '');
+    return nameOnly.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Scene';
+  }
+
+  async function bulkImport() {
+    const category = document.getElementById('category').value;
+    const urlsRaw = document.getElementById('urls').value.trim();
+    const importBtn = document.getElementById('importBtn');
+    const log_el = document.getElementById('log');
+    log_el.innerHTML = '';
+
+    const urls = urlsRaw.split('\n').map(u => u.trim()).filter(u => u.length > 0);
+    if (urls.length === 0) {
+      log('No URLs to import.', 'log-error');
+      return;
+    }
+
+    importBtn.disabled = true;
+    log(`Starting import of ${urls.length} images into "${category}"...`, 'log-info');
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const url of urls) {
+      const title = guessTitleFromUrl(url);
+      try {
+        log(`Fetching: ${title}...`, 'log-info');
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+
+        const safeName = url.split('/').pop().split('?')[0].replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `${Date.now()}_${safeName}`;
+
+        const { error: uploadError } = await supabaseClient
+          .storage
+          .from(BUCKET)
+          .upload(storagePath, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+
+        if (uploadError) throw new Error('Upload: ' + uploadError.message);
+
+        const { error: insertError } = await supabaseClient.from('cutout_scenes').insert({
+          title: title,
+          category: category,
+          storage_path: storagePath,
+          sort_order: Math.floor(Date.now() / 1000)
+        });
+
+        if (insertError) throw new Error('DB insert: ' + insertError.message);
+
+        log(`✓ Imported: ${title}`, 'log-success');
+        successCount++;
+      } catch (e) {
+        log(`✗ Failed (${title}): ${e.message} — this URL may block cross-site fetching; download it manually and use the single-upload tool instead.`, 'log-error');
+        failCount++;
+      }
+    }
+
+    log(`\nDone. ${successCount} succeeded, ${failCount} failed.`, successCount > 0 ? 'log-success' : 'log-error');
+    importBtn.disabled = false;
+  }
+</script>
+</body>
+</html>
