@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owau — Add Cutout Scene</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 20px; background: #0d0d17; color: #eee; }
+  h1 { font-size: 20px; }
+  .warning { background: #3a2a1a; color: #fc8; padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 12px; }
+  label { display: block; margin-top: 16px; font-size: 13px; color: #aaa; }
+  input, select { width: 100%; padding: 10px; margin-top: 4px; border-radius: 8px; border: 1px solid #444; background: #1a1a2a; color: #eee; box-sizing: border-box; font-size: 15px; }
+  input[type="file"] { padding: 8px; }
+  button { margin-top: 20px; padding: 12px 20px; border-radius: 8px; border: none; background: #d4af6a; color: #1a1a2a; font-weight: 600; font-size: 15px; width: 100%; cursor: pointer; }
+  button:disabled { opacity: 0.5; }
+  #status { margin-top: 16px; padding: 10px; border-radius: 8px; font-size: 14px; display: none; }
+  .success { background: #1a3a1a; color: #8f8; display: block !important; }
+  .error { background: #3a1a1a; color: #f88; display: block !important; }
+  #preview { max-width: 100%; margin-top: 12px; border-radius: 8px; display: none; }
+</style>
+</head>
+<body>
+  <h1>Add Cutout Scene</h1>
+
+  <div class="warning">⚠️ Only use scenes with <strong>no people in them</strong> — an empty stage, a car interior, a beach, a boardroom. The whole point is that the user's own photo is the only person in the final image.</div>
+
+  <label>Scene Image</label>
+  <input id="imageFile" type="file" accept="image/*" onchange="previewImage()">
+  <img id="preview">
+
+  <label>Title</label>
+  <input id="title" placeholder="e.g. Empty Concert Stage">
+
+  <label>Category</label>
+  <select id="category">
+    <option value="Wealth & Success">Wealth & Success</option>
+    <option value="Career & Purpose">Career & Purpose</option>
+    <option value="Love & Relationships">Love & Relationships</option>
+    <option value="Health & Body">Health & Body</option>
+    <option value="Mindset & Growth">Mindset & Growth</option>
+  </select>
+
+  <button id="uploadBtn" onclick="uploadScene()">Upload & Save</button>
+
+  <div id="status"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = "https://efidvkbdbdddfldkjois.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmaWR2a2JkYmRkZGZsZGtqb2lzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2NzU3OTYsImV4cCI6MjEwMDI1MTc5Nn0.q8x2-rN8Cl31dFIwOhs4P0kX1GTvj_Zen7t8w5x8sTs";
+  const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const BUCKET = "cutout-scenes";
+
+  function previewImage() {
+    const file = document.getElementById('imageFile').files[0];
+    const preview = document.getElementById('preview');
+    if (file) {
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = 'block';
+    } else {
+      preview.style.display = 'none';
+    }
+  }
+
+  async function uploadScene() {
+    const fileInput = document.getElementById('imageFile');
+    const title = document.getElementById('title').value.trim();
+    const category = document.getElementById('category').value;
+    const status = document.getElementById('status');
+    const uploadBtn = document.getElementById('uploadBtn');
+    status.className = ''; status.style.display = 'none';
+
+    const file = fileInput.files[0];
+    if (!file || !title) {
+      showError('An image and a title are required.');
+      return;
+    }
+
+    uploadBtn.disabled = true;
+
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storagePath = `${Date.now()}_${safeName}`;
+
+      const { error: uploadError } = await supabaseClient
+        .storage
+        .from(BUCKET)
+        .upload(storagePath, file, { contentType: file.type, upsert: false });
+
+      if (uploadError) {
+        showError('Upload failed: ' + uploadError.message);
+        uploadBtn.disabled = false;
+        return;
+      }
+
+      const row = {
+        title: title,
+        category: category,
+        storage_path: storagePath,
+        sort_order: Math.floor(Date.now() / 1000)
+      };
+
+      const { error: insertError } = await supabaseClient.from('cutout_scenes').insert(row);
+
+      if (insertError) {
+        showError('Image uploaded, but saving the record failed: ' + insertError.message);
+      } else {
+        showSuccess('Uploaded and saved! It will show up in the app right away.');
+        fileInput.value = '';
+        document.getElementById('preview').style.display = 'none';
+        document.getElementById('title').value = '';
+      }
+    } catch (e) {
+      showError('Something went wrong: ' + e.message);
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  }
+
+  function showError(msg) {
+    const s = document.getElementById('status');
+    s.className = 'error'; s.textContent = msg;
+  }
+  function showSuccess(msg) {
+    const s = document.getElementById('status');
+    s.className = 'success'; s.textContent = msg;
+  }
+</script>
+</body>
+</html>
